@@ -1,15 +1,50 @@
+# Copyright 2016 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+"""Contains a model definition for AlexNet.
+This work was first described in:
+  ImageNet Classification with Deep Convolutional Neural Networks
+  Alex Krizhevsky, Ilya Sutskever and Geoffrey E. Hinton
+and later refined in:
+  One weird trick for parallelizing convolutional neural networks
+  Alex Krizhevsky, 2014
+Here we provide the implementation proposed in "One weird trick" and not
+"ImageNet Classification", as per the paper, the LRN layers have been removed.
+Usage:
+  with slim.arg_scope(alexnet.alexnet_v2_arg_scope()):
+    outputs, end_points = alexnet.alexnet_v2(inputs)
+@@alexnet_v2
+"""
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import tempfile
+from tensorflow.contrib import layers
+from tensorflow.contrib.framework.python.ops import arg_scope
+from tensorflow.contrib.layers.python.layers import layers as layers_lib
+from tensorflow.contrib.layers.python.layers import regularizers
+from tensorflow.contrib.layers.python.layers import utils
+from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import init_ops
+from tensorflow.python.ops import nn_ops
+from tensorflow.python.ops import variable_scope
+
 import time
-
-import random
-
-import numpy as np
-
 import tensorflow as tf
+import tempfile
+import numpy as np
 
 tf.app.flags.DEFINE_integer('training_iteration', 1,
                             'number of training iterations.')
@@ -17,79 +52,93 @@ tf.app.flags.DEFINE_integer('model_version', 1, 'version number of the model.')
 tf.app.flags.DEFINE_string('work_dir', '/home/student/Desktop/', 'Working directory.')
 FLAGS = tf.app.flags.FLAGS
 
-def deepnn(x, keep_prob):
-    with tf.name_scope('reshape'):
-        x_image = tf.reshape(x, [-1, 52, 52, 1])
-
-    # First convolutional layer - maps one grayscale image to 32 feature maps.
-    with tf.name_scope('conv1'):
-        W_conv1 = weight_variable([5, 5, 1, 32]) #feature size 5x5 to have 46x46 image after convolution
-        b_conv1 = bias_variable([32]) #32 feature maps - arbitrary - can change
-        h_conv1 = tf.nn.relu(conv2d(x_image, W_conv1) + b_conv1) #uses max function (instead of sigmoid function)
-        # h_conv1 = tf.nn.relu(conv2d(h_fc0_flat, W_conv1) + b_conv1)
-
-    # Pooling layer - downsamples by 2X.
-    with tf.name_scope('pool1'):
-        h_pool1 = max_pool_2x2(h_conv1) #now size will be 23x23x32
-
-    # Second convolutional layer -- maps 32 feature maps to 64.
-    with tf.name_scope('conv2'):
-        W_conv2 = weight_variable([4, 4, 32, 64]) #feature size 4x4 to have 20x20 image after convolution
-        b_conv2 = bias_variable([64])
-        h_conv2 = tf.nn.relu(conv2d(h_pool1, W_conv2) + b_conv2)
-        # h_conv2 = tf.nn.relu(conv2d(h_conv1, W_conv2) + b_conv2)
-
-    # Second pooling layer.
-    with tf.name_scope('pool2'):
-        h_pool2 = max_pool_2x2(h_conv2) #now size will be 10x10x64
-
-    # Fully connected layer 1 -- after 2 round of downsampling, our 28x28 image
-    # is down to 10x10x64 feature maps -- maps this to 1024 features.
-    with tf.name_scope('fc1'):
-        W_fc1 = weight_variable([10 * 10 * 64, 4096]) #4096 = first power of 2 larger than 2500 (=50x50)
-        b_fc1 = bias_variable([4096])
-
-        # h_pool2_flat = tf.reshape(h_conv2, [-1, 10 * 10 * 64])
-        h_pool2_flat = tf.reshape(h_pool2, [-1, 10 * 10 * 64])
-        h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, W_fc1) + b_fc1)
-
-    # Dropout - controls the complexity of the model, prevents co-adaptation of
-    # features.
-    with tf.name_scope('dropout'): #maybe add dropout to other layers aswell?
-        h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
-
-    # Map the 4096 features to 3 classes, one for each direction
-    with tf.name_scope('fc2'):
-        W_fc2 = weight_variable([4096, 3])
-        b_fc2 = bias_variable([3])
-
-        y_conv = tf.matmul(h_fc1_drop, W_fc2) + b_fc2
-
-    #regularizer = tf.nn.l2_loss(W_conv1) + tf.nn.l2_loss(W_conv2) + tf.nn.l2_loss(W_fc1) + tf.nn.l2_loss(W_fc2)
-    # regularizer = tf.nn.l2_loss(W_fc0) + tf.nn.l2_loss(W_conv1) + tf.nn.l2_loss(W_conv2) + tf.nn.l2_loss(W_fc1) + tf.nn.l2_loss(W_fc2)
-
-    return y_conv, keep_prob#, regularizer
-
-def conv2d(x, W):
-  """conv2d returns a 2d convolution layer with full stride."""
-  return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='VALID') #VALID = no padding
+trunc_normal = lambda stddev: init_ops.truncated_normal_initializer(0.0, stddev)
 
 
-def max_pool_2x2(x):
-  """max_pool_2x2 downsamples a feature map by 2X."""
-  return tf.nn.max_pool(x, ksize=[1, 2, 2, 1],
-                        strides=[1, 2, 2, 1], padding='VALID') #VALID = no padding
+def alexnet_v2_arg_scope(weight_decay=0.0005):
+  with arg_scope(
+      [layers.conv2d, layers_lib.fully_connected],
+      activation_fn=nn_ops.relu,
+      biases_initializer=init_ops.constant_initializer(0.1),
+      weights_regularizer=regularizers.l2_regularizer(weight_decay)):
+    with arg_scope([layers.conv2d], padding='SAME'):
+      with arg_scope([layers_lib.max_pool2d], padding='VALID') as arg_sc:
+        return arg_sc
 
-def weight_variable(shape):
-  """weight_variable generates a weight variable of a given shape."""
-  initial = tf.truncated_normal(shape, stddev=0.1)
-  return tf.Variable(initial)
+
+def alexnet_v2(inputs,
+               num_classes=3,
+               is_training=True,
+               dropout_keep_prob=0.5,
+               spatial_squeeze=True,
+               scope='alexnet_v2'):
+  """AlexNet version 2.
+  Described in: http://arxiv.org/pdf/1404.5997v2.pdf
+  Parameters from:
+  github.com/akrizhevsky/cuda-convnet2/blob/master/layers/
+  layers-imagenet-1gpu.cfg
+  Note: All the fully_connected layers have been transformed to conv2d layers.
+        To use in classification mode, resize input to 224x224. To use in fully
+        convolutional mode, set spatial_squeeze to false.
+        The LRN layers have been removed and change the initializers from
+        random_normal_initializer to xavier_initializer.
+  Args:
+    inputs: a tensor of size [batch_size, height, width, channels].
+    num_classes: number of predicted classes.
+    is_training: whether or not the model is being trained.
+    dropout_keep_prob: the probability that activations are kept in the dropout
+      layers during training.
+    spatial_squeeze: whether or not should squeeze the spatial dimensions of the
+      outputs. Useful to remove unnecessary dimensions for classification.
+    scope: Optional scope for the variables.
+  Returns:
+    the last op containing the log predictions and end_points dict.
+  """
+  with variable_scope.variable_scope(scope, 'alexnet_v2', [inputs]) as sc:
+    end_points_collection = sc.original_name_scope + '_end_points'
+    # Collect outputs for conv2d, fully_connected and max_pool2d.
+    with arg_scope(
+        [layers.conv2d, layers_lib.fully_connected, layers_lib.max_pool2d],
+        outputs_collections=[end_points_collection]):
+      inputs_image = tf.reshape(inputs, [-1, 52, 52, 1])
+      net = layers.conv2d(
+          inputs_image, 64, [11, 11], 1, padding='VALID', scope='conv1')
+      net = layers_lib.max_pool2d(net, [3, 3], 1, scope='pool1')
+      net = layers.conv2d(net, 192, [5, 5], scope='conv2')
+      net = layers_lib.max_pool2d(net, [3, 3], 1, scope='pool2')
+      net = layers.conv2d(net, 384, [3, 3], scope='conv3')
+      net = layers.conv2d(net, 384, [3, 3], scope='conv4')
+      net = layers.conv2d(net, 256, [3, 3], scope='conv5')
+      net = layers_lib.max_pool2d(net, [3, 3], 1, scope='pool5')
+
+      # Use conv2d instead of fully_connected layers.
+      with arg_scope(
+          [layers.conv2d],
+          weights_initializer=trunc_normal(0.005),
+          biases_initializer=init_ops.constant_initializer(0.1)):
+        net = layers.conv2d(net, 4096, [5, 5], padding='VALID', scope='fc6')
+        net = layers_lib.dropout(
+            net, dropout_keep_prob, is_training=is_training, scope='dropout6')
+        net = layers.conv2d(net, 4096, [1, 1], scope='fc7')
+        net = layers_lib.dropout(
+            net, dropout_keep_prob, is_training=is_training, scope='dropout7')
+        net = layers.conv2d(
+            net,
+            num_classes, [1, 1],
+            activation_fn=None,
+            normalizer_fn=None,
+            biases_initializer=init_ops.zeros_initializer(),
+            scope='fc8')
+
+      # Convert end_points_collection into a end_point dict.
+      end_points = utils.convert_collection_to_dict(end_points_collection)
+      if spatial_squeeze:
+        net = array_ops.squeeze(net, [1, 2], name='fc8/squeezed')
+        end_points[sc.name + '/fc8'] = net
+      return net, end_points
 
 
-def bias_variable(shape):
-  """bias_variable generates a bias variable of a given shape."""
-  initial = tf.constant(0.1, shape=shape)
-  return tf.Variable(initial)
+alexnet_v2.default_image_size = 52
 
 def main(_):
     startTime = time.time()
@@ -111,7 +160,7 @@ def main(_):
     keep_prob = tf.placeholder(tf.float32, name="keep_prob")
     # Build the graph for the deep net
     # y_conv, keep_prob, regularizer = deepnn(x) # with l2 regularization
-    y_conv, keep_prob= deepnn(x, keep_prob)
+    y_conv, keep_prob= alexnet_v2(x, spatial_squeeze=False)
 
     tf.argmax(y_conv, 1, output_type=tf.int32, name="result_argmax")
 
@@ -159,8 +208,7 @@ def main(_):
                     batchEndIndex = batchStartIndex + min(mini_batch_size, len(batchData[0]) - batchStartIndex)
                     train_step.run(
                         feed_dict={x: batchData[0][rearrange][batchStartIndex:batchEndIndex],
-                                   y_: batchData[1][rearrange][batchStartIndex:batchEndIndex],
-                                   keep_prob: 0.5})#, learning_rate: 0.00003 }) #math.exp(-1*math.sqrt(epoch)*sumOfValidations*10)})
+                                   y_: batchData[1][rearrange][batchStartIndex:batchEndIndex]})
 
             print("epoch " + str(epoch+1) + " started validation. time passed: "+ str(time.time()-startTime))
             sumOfValidations = 0
@@ -172,7 +220,7 @@ def main(_):
                     batchEndIndex = batchStartIndex + min(mini_batch_size, len(batchData[0]) - batchStartIndex)
                     validate_accuracy = accuracy.eval(feed_dict={
                         x: batchData[0][batchStartIndex: batchEndIndex],
-                        y_: batchData[1][batchStartIndex:batchEndIndex], keep_prob: 1.0})
+                        y_: batchData[1][batchStartIndex:batchEndIndex]})
                     # print('epoch %d, training accuracy %g' % (epoch, train_accuracy))
                     sumOfValidations = sumOfValidations + validate_accuracy
                     amountOfValidations = amountOfValidations + 1
@@ -192,7 +240,7 @@ def main(_):
                 batchEndIndex = batchStartIndex + min(mini_batch_size, len(batchData[0]) - batchStartIndex)
                 test_accuracy = accuracy.eval(feed_dict={
                     x: batchData[0][batchStartIndex:batchEndIndex],
-                    y_: batchData[1][batchStartIndex:batchEndIndex], keep_prob: 1.0})
+                    y_: batchData[1][batchStartIndex:batchEndIndex]})
                 # print('epoch %d, training accuracy %g' % (epoch, train_accuracy))
                 sumOfTests = sumOfTests + test_accuracy
                 amountOfTests = amountOfTests + 1

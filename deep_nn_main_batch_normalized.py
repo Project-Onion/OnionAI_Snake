@@ -18,35 +18,47 @@ tf.app.flags.DEFINE_string('work_dir', '/home/student/Desktop/', 'Working direct
 FLAGS = tf.app.flags.FLAGS
 
 def deepnn(x, keep_prob):
+    epsilon = 1e-3
     with tf.name_scope('reshape'):
         x_image = tf.reshape(x, [-1, 52, 52, 1])
 
     # First convolutional layer - maps one grayscale image to 32 feature maps.
     with tf.name_scope('conv1'):
-        W_conv1 = weight_variable([5, 5, 1, 32]) #feature size 5x5 to have 46x46 image after convolution
-        b_conv1 = bias_variable([32]) #32 feature maps - arbitrary - can change
-        h_conv1 = tf.nn.relu(conv2d(x_image, W_conv1) + b_conv1) #uses max function (instead of sigmoid function)
+        W_conv1 = weight_variable([5, 5, 1, 32])  # feature size 5x5 to have 46x46 image after convolution
+        Z_conv1 = conv2d(x_image, W_conv1)
+        # b_conv1 = bias_variable([32]) #32 feature maps - arbitrary - can change
+        #h_conv1 = tf.nn.relu(conv2d(x_image, W_conv1))  # + b_conv1) #uses max function (instead of sigmoid function)
         # h_conv1 = tf.nn.relu(conv2d(h_fc0_flat, W_conv1) + b_conv1)
+        batch_mean1, batch_var1 = tf.nn.moments(Z_conv1, [0])
+        scale2 = tf.Variable(tf.ones([32]))
+        beta2 = tf.Variable(tf.zeros([32]))
+        BN1 = tf.nn.batch_normalization(Z_conv1, batch_mean1, batch_var1, beta2, scale2, epsilon)
+        h_conv1 = tf.nn.relu(BN1)  # + b_conv1) #uses max function (instead of sigmoid function)
 
     # Pooling layer - downsamples by 2X.
     with tf.name_scope('pool1'):
-        h_pool1 = max_pool_2x2(h_conv1) #now size will be 23x23x32
+        h_pool1 = max_pool_2x2(h_conv1)  # now size will be 23x23x32
 
     # Second convolutional layer -- maps 32 feature maps to 64.
     with tf.name_scope('conv2'):
-        W_conv2 = weight_variable([4, 4, 32, 64]) #feature size 4x4 to have 20x20 image after convolution
-        b_conv2 = bias_variable([64])
-        h_conv2 = tf.nn.relu(conv2d(h_pool1, W_conv2) + b_conv2)
+        W_conv2 = weight_variable([4, 4, 32, 64])  # feature size 4x4 to have 20x20 image after convolution
+        Z_conv2 = conv2d(h_pool1, W_conv2)
+        # b_conv2 = bias_variable([64])
         # h_conv2 = tf.nn.relu(conv2d(h_conv1, W_conv2) + b_conv2)
+        batch_mean2, batch_var2 = tf.nn.moments(Z_conv2, [0])
+        scale2 = tf.Variable(tf.ones([64]))
+        beta2 = tf.Variable(tf.zeros([64]))
+        BN2 = tf.nn.batch_normalization(Z_conv2, batch_mean2, batch_var2, beta2, scale2, epsilon)
+        h_conv2 = tf.nn.relu(BN2)  # + b_conv2)
 
     # Second pooling layer.
     with tf.name_scope('pool2'):
-        h_pool2 = max_pool_2x2(h_conv2) #now size will be 10x10x64
+        h_pool2 = max_pool_2x2(h_conv2)  # now size will be 10x10x64
 
     # Fully connected layer 1 -- after 2 round of downsampling, our 28x28 image
     # is down to 10x10x64 feature maps -- maps this to 1024 features.
     with tf.name_scope('fc1'):
-        W_fc1 = weight_variable([10 * 10 * 64, 4096]) #4096 = first power of 2 larger than 2500 (=50x50)
+        W_fc1 = weight_variable([10 * 10 * 64, 4096])  # 4096 = first power of 2 larger than 2500 (=50x50)
         b_fc1 = bias_variable([4096])
 
         # h_pool2_flat = tf.reshape(h_conv2, [-1, 10 * 10 * 64])
@@ -55,20 +67,21 @@ def deepnn(x, keep_prob):
 
     # Dropout - controls the complexity of the model, prevents co-adaptation of
     # features.
-    with tf.name_scope('dropout'): #maybe add dropout to other layers aswell?
-        h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
+    # with tf.name_scope('dropout'): #maybe add dropout to other layers aswell?
+    #     h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
 
     # Map the 4096 features to 3 classes, one for each direction
     with tf.name_scope('fc2'):
         W_fc2 = weight_variable([4096, 3])
         b_fc2 = bias_variable([3])
 
-        y_conv = tf.matmul(h_fc1_drop, W_fc2) + b_fc2
+        # y_conv = tf.matmul(h_fc1_drop, W_fc2) + b_fc2
+        y_conv = tf.matmul(h_fc1, W_fc2) + b_fc2
 
-    #regularizer = tf.nn.l2_loss(W_conv1) + tf.nn.l2_loss(W_conv2) + tf.nn.l2_loss(W_fc1) + tf.nn.l2_loss(W_fc2)
+    # regularizer = tf.nn.l2_loss(W_conv1) + tf.nn.l2_loss(W_conv2) + tf.nn.l2_loss(W_fc1) + tf.nn.l2_loss(W_fc2)
     # regularizer = tf.nn.l2_loss(W_fc0) + tf.nn.l2_loss(W_conv1) + tf.nn.l2_loss(W_conv2) + tf.nn.l2_loss(W_fc1) + tf.nn.l2_loss(W_fc2)
 
-    return y_conv, keep_prob#, regularizer
+    return y_conv, keep_prob  # , regularizer
 
 def conv2d(x, W):
   """conv2d returns a 2d convolution layer with full stride."""
@@ -95,9 +108,9 @@ def main(_):
     startTime = time.time()
 
     mini_batch_amount = 123123
-    amountOfMiniBatchFilesToTrain = 1
-    amountOfMiniBatchFilesToValidate = 1
-    amountOfMiniBatchFilesToTest = 1
+    amountOfMiniBatchFilesToTrain = 100
+    amountOfMiniBatchFilesToValidate = 50
+    amountOfMiniBatchFilesToTest = 50
 
     print ("amountOfMiniBatchFilesToTrain: " + str(amountOfMiniBatchFilesToTrain) + "\tamountOfMiniBatchFilesToValidate: " + str(amountOfMiniBatchFilesToValidate) + "\tamountOfMiniBatchFilesToTest: " + str(amountOfMiniBatchFilesToTest))
     fileLocation = "/home/student/Desktop/"

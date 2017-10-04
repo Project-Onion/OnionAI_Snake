@@ -15,16 +15,9 @@ import random
 
 import numpy as np
 
-
 import datetime
 import tensorflow as tf
-from client_agent1 import *
-from tensorflow.contrib.session_bundle.exporter import classification_signature
-from tensorflow.python.saved_model import builder as saved_model_builder, tag_constants, signature_constants
-
-
-# finalNN=[]
-# lastEpoch=False
+# from client_agent1 import *
 
 serverPort = 12000
 serverSocket = socket(AF_INET, SOCK_STREAM)
@@ -131,8 +124,8 @@ with tf.Session() as sess:
     # saver.restore(sess, tf.train.latest_checkpoint('./'))
     #saver.restore(sess, import_path)
 
-    saver = tf.train.import_meta_graph('output_snake_model.meta')
-    saver.restore(sess, tf.train.latest_checkpoint('./'))
+    saver = tf.train.import_meta_graph('/home/student/Desktop/nn_snake/AA_snake_NN/tensorflow_snake/output_snake_model.meta')
+    saver.restore(sess, tf.train.latest_checkpoint('/home/student/Desktop/nn_snake/AA_snake_NN/tensorflow_snake/'))
     # saver.restore(sess,"output_snake_model.data-00000-of-00001")
 
     graph = tf.get_default_graph()
@@ -151,7 +144,7 @@ with tf.Session() as sess:
         mapReceived = ''
         expectedTotalData = connectSocket.recv(5)
         if expectedTotalData:
-            print ("Expected total data size: " + expectedTotalData)
+            #print ("Expected total data size: " + expectedTotalData)
             expectedTotalData = int(expectedTotalData)
             expectedTotalDataLeft = int(expectedTotalData)
             while expectedTotalDataLeft > 0:
@@ -170,18 +163,18 @@ with tf.Session() as sess:
             ##############################################################
             continue
 
-        print("mapReceived before pickle loads: " + str(mapReceived))
+        #print("mapReceived before pickle loads: " + str(mapReceived))
         map = pickle.loads(mapReceived)
-        print("Received map, sending it through deepnn")
+        #print("Received map, sending it through deepnn")
         result_arr = sess.run(result_argmax, feed_dict={x: map.reshape(1,2704), keep_prob: 1.0})
         # answer = result.eval(feed_dict={x: map.reshape(1,2704)})
         # result = tf.argmax(deepnn(map),axis=0, output_type=tf.int32)
         result = str(result_arr[0] + 4)
-        print("Obtained result " + result + " from deepnn. Pickling it now.")
+        #print("Obtained result " + result + " from deepnn. Pickling it now.")
         # returnResult = pickle.dumps(result)
-        print("Sending result to client...")
+        # print("Sending result to client...")
         connectSocket.send(result)
-        print("Done serving client, reseting for new client")
+        # print("Done serving client, reseting for new client")
 
     print("Done sending. Closing Connection...")
     connectSocket.close()
